@@ -1,0 +1,33 @@
+{
+  "servers": {
+    "supabase": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@supabase/mcp-server-supabase@latest",
+        "--access-token",
+        "${env:SUPABASE_ACCESS_TOKEN}",
+        "--project-ref",
+        "${env:SUPABASE_PROJECT_REF}"
+      ]
+    },
+    "gcp": {
+      "command": "npx",
+      "args": ["-y", "gcp-mcp"],
+      "env": {
+        "GOOGLE_APPLICATION_CREDENTIALS": "${userHome}/.config/gcloud/application_default_credentials.json",
+        "GCP_PROJECT_ID": "${env:GCP_PROJECT_ID}"
+      }
+    },
+    "mnemos": {
+      "command": "node",
+      "args": ["${workspaceFolder}/backend/dist/mcp.js"],
+      "env": {
+        "SUPABASE_URL": "${env:SUPABASE_URL}",
+        "SUPABASE_SECRET_KEY": "${env:SUPABASE_SECRET_KEY}",
+        "OPENROUTER_API_KEY": "${env:OPENROUTER_API_KEY}",
+        "SEARXNG_URL": "${env:SEARXNG_URL}"
+      }
+    }
+  }
+}

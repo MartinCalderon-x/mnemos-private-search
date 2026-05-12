@@ -1,0 +1,81 @@
+-- Demo migration template — usado por scripts/render-demo-migration.sh
+-- Substituye {{PREFIX}} por la cadena del demo (ej: demo_a3f9b2c1_)
+-- Resultado: tabla + función + índices aislados por prefix sobre el mismo proyecto.
+--
+-- Esquema idéntico al de migrations/20260508000003_switch_to_local_embeddings.sql
+-- pero con todos los nombres prefijados para evitar choque.
+
+SET LOCAL search_path TO public, extensions;
+
+-- Tabla principal — vectores 384D (multilingual-e5-small)
+CREATE TABLE IF NOT EXISTS public.{{PREFIX}}knowledge_base (
+  id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  title      TEXT NOT NULL,
+  content    TEXT NOT NULL,
+  source     TEXT,
+  metadata   JSONB DEFAULT '{}',
+  embedding  extensions.vector(384),
+  created_at TIMESTAMPTZ DEFAULT now(),
+  updated_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Índice HNSW para búsqueda coseno
+CREATE INDEX IF NOT EXISTS {{PREFIX}}knowledge_base_embedding_idx
+  ON public.{{PREFIX}}knowledge_base
+  USING hnsw (embedding extensions.vector_cosine_ops)
+  WITH (m = 16, ef_construction = 64);
+
+-- Índice secundario para filtrar por source
+CREATE INDEX IF NOT EXISTS {{PREFIX}}knowledge_base_source_idx
+  ON public.{{PREFIX}}knowledge_base (source);
+
+-- Índice GIN para metadata JSONB
+CREATE INDEX IF NOT EXISTS {{PREFIX}}knowledge_base_metadata_idx
+  ON public.{{PREFIX}}knowledge_base USING gin (metadata);
+
+-- Trigger updated_at — reutiliza public.update_updated_at() si ya existe (idempotente).
+-- Si no existe (proyecto Supabase fresco), créala antes de aplicar este template.
+CREATE OR REPLACE FUNCTION public.update_updated_at()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS {{PREFIX}}knowledge_base_updated_at ON public.{{PREFIX}}knowledge_base;
+CREATE TRIGGER {{PREFIX}}knowledge_base_updated_at
+  BEFORE UPDATE ON public.{{PREFIX}}knowledge_base
+  FOR EACH ROW EXECUTE FUNCTION public.update_updated_at();
+
+-- Función de búsqueda semántica — devuelve hits ordenados por similitud coseno.
+CREATE OR REPLACE FUNCTION public.{{PREFIX}}match_knowledge(
+  query_embedding extensions.vector(384),
+  match_threshold  float  DEFAULT 0.7,
+  match_count      int    DEFAULT 5,
+  filter_source    text   DEFAULT NULL
+)
+RETURNS TABLE (
+  id         uuid,
+  title      text,
+  content    text,
+  source     text,
+  metadata   jsonb,
+  similarity float
+)
+LANGUAGE sql STABLE
+SET search_path = public, extensions
+AS $$
+  SELECT
+    id, title, content, source, metadata,
+    1 - (embedding <=> query_embedding) AS similarity
+  FROM public.{{PREFIX}}knowledge_base
+  WHERE
+    1 - (embedding <=> query_embedding) > match_threshold
+    AND (filter_source IS NULL OR source = filter_source)
+  ORDER BY embedding <=> query_embedding
+  LIMIT match_count;
+$$;
+
+-- RLS: igual que canónica — backend usa SECRET_KEY (bypass).
+ALTER TABLE public.{{PREFIX}}knowledge_base ENABLE ROW LEVEL SECURITY;

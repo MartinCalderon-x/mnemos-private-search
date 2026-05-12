@@ -1,0 +1,40 @@
+use_default_settings: true
+
+server:
+  # Sobreescribir con SEARXNG_SECRET en .env
+  secret_key: "change-me-in-production"
+  limiter: false
+  image_proxy: false
+  port: 8080
+  bind_address: "0.0.0.0"
+
+search:
+  safe_search: 0
+  autocomplete: ""
+  default_lang: "auto"
+  # Formato JSON para queries del MCP server
+  formats:
+    - html
+    - json
+
+# Solo motores que funcionan sin login
+engines:
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: google
+    disabled: false
+  - name: startpage
+    disabled: false
+
+ui:
+  static_use_hash: true
+  default_theme: simple
+  query_in_title: false
+
+# Sin telemetría
+enabled_plugins:
+  - Basic Calculator
+  - Hash plugin
+  - Self Information

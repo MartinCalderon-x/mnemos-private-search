@@ -1,0 +1,91 @@
+# ============================================
+# Product Seed - Git Ignore
+# ============================================
+
+# === Virtual Environment (Factory) ===
+venv/
+.venv/
+env/
+ENV/
+
+# === Environment Variables ===
+.env
+.env.local
+.env.*.local
+
+# === Factory Data (runtime) ===
+data/vectordb/
+data/cache/
+data/logs/
+!data/.gitkeep
+
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+/lib/
+/lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# === Node.js (if product uses Node) ===
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# === Testing ===
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage/
+
+# === IDE ===
+.vscode/*
+!.vscode/mcp.json
+.idea/
+
+# === Local-only docs (entregables narrativos + presentaciones) ===
+# Estos viven solo en la máquina del autor. El repo público no los incluye.
+docs/linkedin/
+docs/presentation/
+*.swp
+*.swo
+*~
+.project
+.pydevproject
+.settings/
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Logs ===
+*.log
+logs/
+
+# === Jupyter ===
+.ipynb_checkpoints/
+
+# === Build outputs ===
+# Python
+*.egg-info/
+# Node/React
+product/dist/
+product/build/
+product/.next/
