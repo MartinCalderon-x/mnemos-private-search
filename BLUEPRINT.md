@@ -5,7 +5,7 @@
 > **smokes ejecutables** para que GitHub Copilot Agent Mode pueda reconstruir el sistema
 > entero desde cero.
 >
-> Reference repo (privado) sincronizado al commit `385669f`.
+> Reference repo (privado) sincronizado al commit `9032048`.
 
 ---
 
@@ -123,4 +123,4 @@ Cada ADR es auto-contenido. Léelos en orden numérico.
 2. Revisar el ADR relevante en `docs/adr/`
 3. Comparar con la spec en `docs/flows/`
 
-Generado el 2026-05-12 23:26 UTC desde `mnemos@385669f`.
+Generado el 2026-05-12 23:52 UTC desde `mnemos@9032048`.

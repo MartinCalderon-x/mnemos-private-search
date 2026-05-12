@@ -29,10 +29,15 @@ WRITE_ENV=0
 [[ "${1:-}" == "--write-env" ]] && WRITE_ENV=1
 
 # ─── Config ────────────────────────────────────────────────────────────────
-GITHUB_REPO="${GITHUB_REPO:-MartinCalderon-x/mnemos}"
+# Soporta múltiples repos separados por coma para que el mismo SA pueda ser
+# impersonado desde N repos hermanos (típico: reference privado + blueprint público)
+GITHUB_REPOS="${GITHUB_REPOS:-${GITHUB_REPO:-MartinCalderon-x/mnemos}}"
 POOL_ID="mnemos-pool"
 PROVIDER_ID="github-provider"
 SA_NAME="mnemos-deploy"
+
+# Split comma-separated repos en array
+IFS=',' read -r -a REPOS_ARRAY <<< "$GITHUB_REPOS"
 
 PROJECT_ID=$(gcloud config get-value project 2>/dev/null)
 if [[ -z "$PROJECT_ID" || "$PROJECT_ID" == "(unset)" ]]; then
@@ -43,11 +48,11 @@ PROJECT_NUMBER=$(gcloud projects describe "$PROJECT_ID" --format='value(projectN
 SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 WIF_PROVIDER="projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/providers/${PROVIDER_ID}"
 
-echo "Project:     $PROJECT_ID (number: $PROJECT_NUMBER)"
-echo "GitHub repo: $GITHUB_REPO"
-echo "Pool:        $POOL_ID"
-echo "Provider:    $PROVIDER_ID"
-echo "SA:          $SA_EMAIL"
+echo "Project:      $PROJECT_ID (number: $PROJECT_NUMBER)"
+echo "GitHub repos: ${REPOS_ARRAY[*]}"
+echo "Pool:         $POOL_ID"
+echo "Provider:     $PROVIDER_ID"
+echo "SA:           $SA_EMAIL"
 echo ""
 
 # ─── 1. Enable required APIs ───────────────────────────────────────────────
@@ -75,6 +80,11 @@ else
 fi
 
 # ─── 3. OIDC Provider ──────────────────────────────────────────────────────
+# Build CEL condition: assertion.repository in ['repo1', 'repo2', ...]
+REPOS_CEL_LIST=$(printf "'%s'," "${REPOS_ARRAY[@]}")
+REPOS_CEL_LIST="[${REPOS_CEL_LIST%,}]"
+CONDITION="assertion.repository in $REPOS_CEL_LIST"
+
 if gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
      --workload-identity-pool="$POOL_ID" \
      --location=global --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -83,7 +93,7 @@ if gcloud iam workload-identity-pools providers describe "$PROVIDER_ID" \
     --workload-identity-pool="$POOL_ID" \
     --location=global --project="$PROJECT_ID" \
     --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.actor=assertion.actor,attribute.ref=assertion.ref" \
-    --attribute-condition="assertion.repository == '${GITHUB_REPO}'" \
+    --attribute-condition="$CONDITION" \
     --quiet
 else
   gcloud iam workload-identity-pools providers create-oidc "$PROVIDER_ID" \
@@ -91,11 +101,11 @@ else
     --location=global --project="$PROJECT_ID" \
     --display-name="GitHub Actions" \
     --attribute-mapping="google.subject=assertion.sub,attribute.repository=assertion.repository,attribute.actor=assertion.actor,attribute.ref=assertion.ref" \
-    --attribute-condition="assertion.repository == '${GITHUB_REPO}'" \
+    --attribute-condition="$CONDITION" \
     --issuer-uri="https://token.actions.githubusercontent.com" \
     --quiet
 fi
-ok "provider '$PROVIDER_ID' restringido a repo '$GITHUB_REPO'"
+ok "provider '$PROVIDER_ID' restringido a repos: ${REPOS_ARRAY[*]}"
 
 # ─── 4. Service Account ────────────────────────────────────────────────────
 if gcloud iam service-accounts describe "$SA_EMAIL" \
@@ -128,13 +138,15 @@ for role in "${ROLES[@]}"; do
 done
 ok "roles asignados: ${ROLES[*]}"
 
-# ─── 6. WIF → SA binding ───────────────────────────────────────────────────
-gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
-  --project="$PROJECT_ID" \
-  --role="roles/iam.workloadIdentityUser" \
-  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/attribute.repository/${GITHUB_REPO}" \
-  --quiet >/dev/null
-ok "WIF principalSet bound a SA (solo el repo ${GITHUB_REPO} puede impersonar)"
+# ─── 6. WIF → SA binding (uno por repo) ─────────────────────────────────────
+for repo in "${REPOS_ARRAY[@]}"; do
+  gcloud iam service-accounts add-iam-policy-binding "$SA_EMAIL" \
+    --project="$PROJECT_ID" \
+    --role="roles/iam.workloadIdentityUser" \
+    --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUMBER}/locations/global/workloadIdentityPools/${POOL_ID}/attribute.repository/${repo}" \
+    --quiet >/dev/null
+done
+ok "WIF principalSet bound a SA para: ${REPOS_ARRAY[*]}"
 
 # ─── 7. Output ─────────────────────────────────────────────────────────────
 echo ""

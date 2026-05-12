@@ -13,6 +13,10 @@
 # Decisión arquitectónica: ADR-013 — el reference (este repo) es privado;
 # el blueprint público es un snapshot deliberado, sincronizado manualmente.
 #
+# Lo que SÍ se incluye de .github/: workflows (deploy.yml), copilot-instructions.md,
+# copilot/mcp-config.json. Son configuración pública por diseño. Si en el futuro
+# se agregan secrets reales dentro de .github/, hay que excluirlos puntualmente.
+#
 # Uso:
 #   ./scripts/generate-blueprint.sh ../mnemos-private-search
 #   ./scripts/generate-blueprint.sh /tmp/test --force
@@ -89,7 +93,6 @@ rsync -a $DELETE_FLAG \
   --exclude='docs/presentation/' \
   --exclude='docs/sessions/' \
   --exclude='docs/paper/' \
-  --exclude='.github/copilot/' \
   --exclude='.claude/' \
   --exclude='.cache/' \
   --exclude='.DS_Store' \
