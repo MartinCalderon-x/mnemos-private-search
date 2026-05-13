@@ -1,0 +1,28 @@
+{
+  "name": "mnemos-backend",
+  "version": "1.0.0",
+  "description": "mnemos HTTP API + MCP server — RAG + anonymous search agent",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "dev:mcp": "tsx src/mcp.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "start:mcp": "node dist/mcp.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@supabase/supabase-js": "^2.39.0",
+    "@xenova/transformers": "^2.17.2",
+    "dotenv": "^16.4.5",
+    "hono": "^4.6.0",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}

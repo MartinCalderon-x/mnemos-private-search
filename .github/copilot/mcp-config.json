@@ -1,0 +1,28 @@
+{
+  "_comment": [
+    "MCP configuration for GitHub Copilot Coding Agent.",
+    "Per GitHub docs, this JSON does NOT live in the repo — it goes in:",
+    "   Settings → Code & automation → Copilot → Cloud agent → MCP configuration",
+    "This file is a REFERENCE COPY committed so the team can review/edit before pasting.",
+    "",
+    "Secret naming convention: variables/secrets referenced here MUST be prefixed",
+    "COPILOT_MCP_* — Coding Agent does not see other GH secrets.",
+    "",
+    "To sync the secrets: ./scripts/setup-copilot-mcp-secrets.sh"
+  ],
+  "mcpServers": {
+    "supabase": {
+      "type": "local",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@supabase/mcp-server-supabase@latest",
+        "--access-token",
+        "${COPILOT_MCP_SUPABASE_ACCESS_TOKEN}",
+        "--project-ref",
+        "${COPILOT_MCP_SUPABASE_PROJECT_REF}"
+      ],
+      "tools": ["*"]
+    }
+  }
+}

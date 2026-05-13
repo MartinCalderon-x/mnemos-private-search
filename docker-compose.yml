@@ -1,0 +1,39 @@
+services:
+  searxng:
+    image: searxng/searxng:latest
+    container_name: mnemos-searxng
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-change-me-in-production}
+    restart: unless-stopped
+    networks:
+      - mnemos
+
+  # MCP Server — solo en producción/CI.
+  # En desarrollo local corre con: cd backend && npm run dev
+  mcp-server:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mnemos-mcp
+    ports:
+      - "3000:3000"
+    environment:
+      SUPABASE_URL: ${SUPABASE_URL}
+      SUPABASE_SECRET_KEY: ${SUPABASE_SECRET_KEY}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
+      SEARXNG_URL: http://searxng:8080
+    depends_on:
+      - searxng
+    restart: unless-stopped
+    networks:
+      - mnemos
+    profiles:
+      - production
+
+networks:
+  mnemos:
+    driver: bridge

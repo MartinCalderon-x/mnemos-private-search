@@ -1,0 +1,293 @@
+# ============================================================================
+# Deploy mnemos a Cloud Run
+# ============================================================================
+# Triggers:
+#   · workflow_dispatch (manual) — demo deploy con prefix custom
+#   · push to main      — deploy "prod" (sin prefix) cuando cambia código
+#
+# Auth: Workload Identity Federation (ADR-012). Cero SA keys.
+# Aislamiento: TABLE_PREFIX (ADR-011) propagado a los 3 servicios.
+# Servicios: mnemos-{backend,frontend,searxng}-{prefix_clean}
+#
+# Requisitos en el repo (secrets/variables):
+#   secrets:   GCP_WIF_PROVIDER, GCP_WIF_SERVICE_ACCOUNT, SUPABASE_URL,
+#              SUPABASE_SECRET_KEY, SUPABASE_ACCESS_TOKEN, SUPABASE_PROJECT_REF,
+#              OPENROUTER_API_KEY, SEARXNG_SECRET,
+#              VITE_SUPABASE_URL, VITE_SUPABASE_PUBLISHABLE_KEY
+#   variables: GCP_PROJECT_ID
+# ============================================================================
+
+name: Deploy mnemos to Cloud Run
+
+on:
+  workflow_dispatch:
+    inputs:
+      prefix:
+        description: 'Demo prefix (ej demo_a3f9b2c1_, vacío = prod)'
+        required: false
+        default: ''
+        type: string
+      run_migration:
+        description: 'Aplicar migration prefijada antes del deploy'
+        required: false
+        default: false
+        type: boolean
+      backend_url:
+        description: 'URL pública del backend (para VITE_BACKEND_URL del frontend). Vacío = el frontend usa same-origin / no llama backend'
+        required: false
+        default: 'https://api.<your-domain>'
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - 'frontend/**'
+      - 'searxng/**'
+      - '.github/workflows/deploy.yml'
+
+env:
+  REGION: us-central1
+  AR_REPO: mnemos
+
+permissions:
+  contents: read
+  id-token: write    # requerido por Workload Identity Federation
+
+jobs:
+  # ──────────────────────────────────────────────────────────────────────
+  # 1. Resolver prefix + image tag — corre antes de todo
+  # ──────────────────────────────────────────────────────────────────────
+  setup:
+    name: Setup (resolve prefix + image tag)
+    runs-on: ubuntu-latest
+    outputs:
+      prefix:        ${{ steps.resolve.outputs.prefix }}
+      prefix_clean:  ${{ steps.resolve.outputs.prefix_clean }}
+      image_tag:     ${{ steps.resolve.outputs.image_tag }}
+    steps:
+      - id: resolve
+        run: |
+          if [[ -n "${{ inputs.prefix }}" ]]; then
+            P="${{ inputs.prefix }}"
+          elif [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            # Manual sin prefix explícito: auto demo_<runid8>_
+            SHORT=$(printf '%s' "${{ github.run_id }}" | tail -c 8)
+            P="demo_${SHORT}_"
+          else
+            # Push a main: deploy "prod" sin prefix
+            P=""
+          fi
+          # prefix_clean: para nombres GCP (Cloud Run no acepta '_')
+          CLEAN="${P%_}"
+          CLEAN="${CLEAN//_/-}"
+          [[ -z "$CLEAN" ]] && CLEAN="prod"
+
+          TAG="${GITHUB_SHA:0:7}-${CLEAN}"
+
+          echo "prefix=$P"             >> "$GITHUB_OUTPUT"
+          echo "prefix_clean=$CLEAN"   >> "$GITHUB_OUTPUT"
+          echo "image_tag=$TAG"        >> "$GITHUB_OUTPUT"
+
+          echo "::notice title=mnemos deploy::prefix='$P', clean='$CLEAN', tag='$TAG'"
+
+  # ──────────────────────────────────────────────────────────────────────
+  # 2. Migración Supabase (opcional, solo si run_migration=true)
+  # ──────────────────────────────────────────────────────────────────────
+  migrate:
+    name: Apply demo migration
+    needs: setup
+    if: inputs.run_migration && needs.setup.outputs.prefix != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply migration via Supabase Management API
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF:  ${{ secrets.SUPABASE_PROJECT_REF }}
+        run: ./scripts/apply-demo-migration.sh "${{ needs.setup.outputs.prefix }}"
+
+  # ──────────────────────────────────────────────────────────────────────
+  # 3. Build de 3 imágenes en paralelo
+  # ──────────────────────────────────────────────────────────────────────
+  build:
+    name: Build ${{ matrix.service }}
+    needs: setup
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [backend, frontend, searxng]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account:            ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Ensure Artifact Registry repo exists (idempotent)
+        run: |
+          gcloud artifacts repositories describe "${{ env.AR_REPO }}" \
+            --location="${{ env.REGION }}" >/dev/null 2>&1 \
+          || gcloud artifacts repositories create "${{ env.AR_REPO }}" \
+               --repository-format=docker \
+               --location="${{ env.REGION }}" \
+               --description="Mnemos container images"
+
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker "${{ env.REGION }}-docker.pkg.dev" --quiet
+
+      - name: Build & push ${{ matrix.service }}
+        env:
+          IMAGE: ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.AR_REPO }}/${{ matrix.service }}:${{ needs.setup.outputs.image_tag }}
+        run: |
+          BUILD_ARGS=""
+          if [[ "${{ matrix.service }}" == "frontend" ]]; then
+            # Vite inline las VITE_* en el bundle; se pasan como build-arg
+            BUILD_ARGS="--build-arg VITE_SUPABASE_URL=${{ secrets.VITE_SUPABASE_URL }} \
+                        --build-arg VITE_SUPABASE_PUBLISHABLE_KEY=${{ secrets.VITE_SUPABASE_PUBLISHABLE_KEY }} \
+                        --build-arg VITE_BACKEND_URL=${{ inputs.backend_url || 'https://api.<your-domain>' }}"
+          fi
+          docker build $BUILD_ARGS \
+            -t "$IMAGE" \
+            -f "${{ matrix.service }}/Dockerfile" \
+            "${{ matrix.service }}/"
+          docker push "$IMAGE"
+
+  # ──────────────────────────────────────────────────────────────────────
+  # 4. Deploy de los 3 servicios a Cloud Run en paralelo
+  # ──────────────────────────────────────────────────────────────────────
+  deploy:
+    name: Deploy ${{ matrix.service }}
+    needs: [setup, build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: backend
+            port: 3000
+            memory: 512Mi
+            cpu: 1
+          - service: frontend
+            port: 80
+            memory: 256Mi
+            cpu: 1
+          - service: searxng
+            port: 8080
+            memory: 512Mi
+            cpu: 1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account:            ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - id: deploy-backend
+        if: matrix.service == 'backend'
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: mnemos-backend-${{ needs.setup.outputs.prefix_clean }}
+          image:   ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.AR_REPO }}/backend:${{ needs.setup.outputs.image_tag }}
+          region:  ${{ env.REGION }}
+          flags: |
+            --port=3000
+            --memory=2Gi
+            --cpu=2
+            --min-instances=0
+            --max-instances=4
+            --timeout=120
+            --allow-unauthenticated
+          env_vars: |
+            TABLE_PREFIX=${{ needs.setup.outputs.prefix }}
+            SUPABASE_URL=${{ secrets.SUPABASE_URL }}
+            SUPABASE_SECRET_KEY=${{ secrets.SUPABASE_SECRET_KEY }}
+            OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
+            SEARXNG_URL=https://mnemos-searxng-${{ needs.setup.outputs.prefix_clean }}-rttm4mqubq-uc.a.run.app
+            CORS_ORIGINS=https://<your-domain>,https://www.<your-domain>
+
+      - id: deploy-frontend
+        if: matrix.service == 'frontend'
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: mnemos-frontend-${{ needs.setup.outputs.prefix_clean }}
+          image:   ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.AR_REPO }}/frontend:${{ needs.setup.outputs.image_tag }}
+          region:  ${{ env.REGION }}
+          flags: |
+            --port=80
+            --memory=256Mi
+            --cpu=1
+            --min-instances=0
+            --max-instances=4
+            --allow-unauthenticated
+
+      - id: deploy-searxng
+        if: matrix.service == 'searxng'
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: mnemos-searxng-${{ needs.setup.outputs.prefix_clean }}
+          image:   ${{ env.REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/${{ env.AR_REPO }}/searxng:${{ needs.setup.outputs.image_tag }}
+          region:  ${{ env.REGION }}
+          flags: |
+            --port=8080
+            --memory=512Mi
+            --cpu=1
+            --min-instances=0
+            --max-instances=2
+            --allow-unauthenticated
+          env_vars: |
+            SEARXNG_SECRET=${{ secrets.SEARXNG_SECRET }}
+
+      # Log de la URL desplegada (visible en el job de Actions)
+      - name: Show deployed URL
+        run: |
+          case "${{ matrix.service }}" in
+            backend)  URL="${{ steps.deploy-backend.outputs.url }}" ;;
+            frontend) URL="${{ steps.deploy-frontend.outputs.url }}" ;;
+            searxng)  URL="${{ steps.deploy-searxng.outputs.url }}" ;;
+          esac
+          echo "::notice title=${{ matrix.service }} deployed::$URL"
+
+  # ──────────────────────────────────────────────────────────────────────
+  # 5. Reporte final — 3 URLs en el summary del workflow
+  # ──────────────────────────────────────────────────────────────────────
+  report:
+    name: Report deployed URLs
+    needs: [setup, deploy]
+    if: always() && needs.deploy.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account:            ${{ secrets.GCP_WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+
+      - name: Resolve URLs from Cloud Run
+        run: |
+          PREFIX_CLEAN="${{ needs.setup.outputs.prefix_clean }}"
+          {
+            echo "## mnemos deploy — prefix \`${{ needs.setup.outputs.prefix }}\`"
+            echo ""
+            echo "| Servicio | URL |"
+            echo "|----------|-----|"
+            for s in backend frontend searxng; do
+              SVC="mnemos-${s}-${PREFIX_CLEAN}"
+              URL=$(gcloud run services describe "$SVC" \
+                      --region="${{ env.REGION }}" \
+                      --format='value(status.url)' 2>/dev/null || echo "(no disponible)")
+              echo "| $s | $URL |"
+            done
+          } | tee -a "$GITHUB_STEP_SUMMARY"
